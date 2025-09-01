@@ -1,0 +1,5 @@
+name: DecodeQrcode # 这是你的插件的唯一识别名。
+desc: 基于 OpenCV 的微信开源二维码识别模块，识别图片中的二维码并返回解码结果 # 插件简短描述
+version: v1.0.0 # 插件版本号。格式：v1.1.1 或者 v1.1
+author: Sukafon # 作者
+repo: https://github.com/sukafon/astrbot_plugin_decode_qrcode # 插件的仓库地址

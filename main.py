@@ -2,10 +2,10 @@ import importlib
 import subprocess
 import sys
 import os
+import astrbot.api.message_components as Comp
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star, register
 from astrbot.api import logger
-from astrbot.api.message_components import Image, Reply, Nodes
 from astrbot.core.utils.io import download_image_by_url
 from astrbot.core.utils.astrbot_path import (
     get_astrbot_data_path,
@@ -26,10 +26,14 @@ class DecodeQrcode(Star):
         cv2 = importlib.import_module("cv2")
 
     def _check_opencv(self) -> bool:
-        """检查是否安装了 OpenCV"""
+        """检查是否安装了 OpenCV 且包含 cv2.wechat_qrcode_WeChatQRCode"""
         try:
-            importlib.import_module("cv2")
-            return True
+            cv2 = importlib.import_module("cv2")
+            # 检查 cv2 是否有 wechat_qrcode_WeChatQRCode 属性
+            if hasattr(cv2, "wechat_qrcode_WeChatQRCode"):
+                return True
+            else:
+                return False
         except ImportError:
             return False
 
@@ -55,10 +59,28 @@ class DecodeQrcode(Star):
         try:
             if self._has_gui():
                 logger.info("检测到 GUI 环境，安装 opencv-contrib-python")
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "opencv-contrib-python"])
+                subprocess.check_call(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--upgrade",
+                        "opencv-contrib-python",
+                    ]
+                )
             else:
                 logger.info("未检测到 GUI，安装 opencv-contrib-python-headless")
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "--upgrade", "opencv-contrib-python-headless"])
+                subprocess.check_call(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--upgrade",
+                        "opencv-contrib-python-headless",
+                    ]
+                )
 
             logger.info("成功安装 OpenCV 包")
         except subprocess.CalledProcessError as e:
@@ -96,16 +118,16 @@ class DecodeQrcode(Star):
         file_path = ""
         # 遍历消息链，获取第一张图片
         for comp in event.get_messages():
-            if isinstance(comp, Image):
+            if isinstance(comp, Comp.Image):
                 fileName = comp.file.replace("{", "").replace("}", "").replace("-", "")
                 file_path = os.path.join(self.temp_images_path, fileName)
                 # 检查文件是否存在
                 if not os.path.isfile(file_path):
                     file_path = await download_image_by_url(comp.url, path=file_path)
                 break
-            elif isinstance(comp, Reply):
+            elif isinstance(comp, Comp.Reply):
                 for quote in comp.chain:
-                    if isinstance(quote, Image):
+                    if isinstance(quote, Comp.Image):
                         fileName = (
                             quote.file.replace("{", "")
                             .replace("}", "")
@@ -132,10 +154,10 @@ class DecodeQrcode(Star):
         texts, _ = self.detector.detectAndDecode(binary_img)
 
         # 处理解码结果
-        if len(texts) > 0 or event.platform_meta.name == "aiocqhttp":
+        if len(texts) > 0:
             # 对QQ群使用转发
             if event.platform_meta.name == "aiocqhttp":
-                from astrbot.api.message_components import Node, Plain
+                from astrbot.api.message_components import Node, Nodes, Plain
 
                 nodes = [
                     Node(
@@ -162,10 +184,20 @@ class DecodeQrcode(Star):
                 result = "二维码识别结果: \n"
                 for _, text in enumerate(texts):
                     result += text.strip() + "\n"
-                yield event.plain_result(result.strip())
+                yield event.chain_result(
+                    [
+                        Comp.Reply(id=event.message_obj.message_id),
+                        Comp.Plain(result.strip()),
+                    ]
+                )
             return
         else:
-            yield event.plain_result("未识别任何二维码。")
+            yield event.chain_result(
+                [
+                    Comp.Reply(id=event.message_obj.message_id),
+                    Comp.Plain("未识别到任何二维码。"),
+                ]
+            )
 
     async def terminate(self):
         """可选择实现异步的插件销毁方法，当插件被卸载/停用时会调用。"""

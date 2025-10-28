@@ -1,4 +1,3 @@
-import importlib
 import os
 import cv2
 import astrbot.api.message_components as Comp
@@ -7,10 +6,9 @@ from astrbot.api.star import Context, Star
 from astrbot.api.message_components import Node, Nodes, Plain
 from astrbot.api import logger
 from astrbot.core.utils.io import download_image_by_url
-from astrbot.core.utils.astrbot_path import (
-    get_astrbot_data_path,
-    get_astrbot_plugin_path,
-)
+from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
+
+MAX_SIZE = 480  # 设置图像最大尺寸，超过则缩放
 
 
 class DecodeQrcode(Star):
@@ -25,24 +23,14 @@ class DecodeQrcode(Star):
 
     def _check_opencv(self) -> bool:
         """检查是否安装了 OpenCV 且包含 cv2.wechat_qrcode_WeChatQRCode"""
-        try:
-            cv2 = importlib.import_module("cv2")
-            # 检查 cv2 是否有 wechat_qrcode_WeChatQRCode 属性
-            if hasattr(cv2, "wechat_qrcode_WeChatQRCode"):
-                return True
-            else:
-                return False
-        except ImportError:
+        # 检查 cv2 是否有 wechat_qrcode_WeChatQRCode 属性
+        if hasattr(cv2, "wechat_qrcode_WeChatQRCode"):
+            return True
+        else:
             return False
 
     async def initialize(self):
         """可选择实现异步的插件初始化方法，当实例化该插件类之后会自动调用该方法。"""
-        # 图片缓存路径, 不使用插件数据目录，以便多插件数据共享
-        self.temp_images_path = os.path.join(
-            get_astrbot_data_path(), "temp_data", "images"
-        )
-        if not os.path.exists(self.temp_images_path):
-            os.makedirs(self.temp_images_path, exist_ok=True)
         # 配置模型文件路径
         models = os.path.join(
             get_astrbot_plugin_path(), "astrbot_plugin_decode_qrcode", "models"
@@ -67,7 +55,6 @@ class DecodeQrcode(Star):
         # 遍历消息链，获取第一张图片
         for comp in event.get_messages():
             if isinstance(comp, Comp.Image):
-                # 用框架的缓存方案，不重复造轮子了
                 file_path = await download_image_by_url(comp.url)
                 break
             elif isinstance(comp, Comp.Reply):
@@ -86,16 +73,24 @@ class DecodeQrcode(Star):
         # error: (-215:Assertion failed) !img.empty() in function 'detectAndDecode'
         if image is None:
             yield event.plain_result(
-                "无法读取图片，请确保图片格式正确且未损坏，然后再试一次。"
+                "无法读取图片，可能图片格式不支持或文件损坏，请再试一次。"
             )
             return
+
+        # 获取图像尺寸
+        height, width = image.shape[:2]
+
+        # 压缩以提高识别性能和识别率
+        if width > MAX_SIZE or height > MAX_SIZE:
+            scale = MAX_SIZE / float(max(width, height))
+            new_size = (int(width * scale), int(height * scale))
+            image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
 
         # 直接识别
         texts, _ = self.detector.detectAndDecode(image)
 
         if not texts:
             logger.debug("直接识别二维码失败，尝试二值化处理后再次识别。")
-            logger.debug("形态学修复后识别二维码失败，尝试二值化处理后再次识别。")
             # 转为灰度图
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             # 中值滤波，减少噪声影响
@@ -110,7 +105,7 @@ class DecodeQrcode(Star):
 
         if not texts:
             logger.debug("二值化处理后识别二维码失败，尝试形态学修复后再次识别。")
-            # 创建形态学卷积核（对于艺术二维码，似乎能够提高识别率）
+            # 创建形态学卷积核
             kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
             # 闭运算
             image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=1)

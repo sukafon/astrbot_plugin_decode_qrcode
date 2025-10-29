@@ -1,14 +1,13 @@
 import os
 import cv2
 import astrbot.api.message_components as Comp
+from pyzbar.pyzbar import decode
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.api.message_components import Node, Nodes, Plain
 from astrbot.api import logger
 from astrbot.core.utils.io import download_image_by_url
 from astrbot.core.utils.astrbot_path import get_astrbot_plugin_path
-
-MAX_SIZE = 480  # 设置图像最大尺寸，超过则缩放
 
 
 class DecodeQrcode(Star):
@@ -77,41 +76,23 @@ class DecodeQrcode(Star):
             )
             return
 
-        # 获取图像尺寸
-        height, width = image.shape[:2]
-
-        # 压缩以提高识别性能和识别率
-        if width > MAX_SIZE or height > MAX_SIZE:
-            scale = MAX_SIZE / float(max(width, height))
-            new_size = (int(width * scale), int(height * scale))
-            image = cv2.resize(image, new_size, interpolation=cv2.INTER_AREA)
-
         # 直接识别
         texts, _ = self.detector.detectAndDecode(image)
 
         if not texts:
-            logger.debug("直接识别二维码失败，尝试二值化处理后再次识别。")
+            logger.debug("直接识别二维码失败，尝试滤波处理后再次识别。")
             # 转为灰度图
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            # 中值滤波，减少噪声影响
-            blurred = cv2.medianBlur(gray, 5)
-            # 大津法二值化处理
-            _, binary = cv2.threshold(
-                blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU
-            )
-
-            # 检测和解码二维码
-            texts, _ = self.detector.detectAndDecode(binary)
-
-        if not texts:
-            logger.debug("二值化处理后识别二维码失败，尝试形态学修复后再次识别。")
-            # 创建形态学卷积核
-            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-            # 闭运算
-            image = cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel, iterations=1)
-
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # 滤波器
+            image = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
             # 检测和解码二维码
             texts, _ = self.detector.detectAndDecode(image)
+
+        if not texts:
+            logger.debug("识别二维码失败，尝试降级 Pyzbar 再次识别。")
+            # 检测和解码二维码
+            result = decode(image)
+            texts = tuple(d.data.decode("utf-8") for d in result)
 
         # 处理解码结果
         if len(texts) > 0:

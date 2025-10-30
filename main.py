@@ -1,5 +1,6 @@
 import os
 import cv2
+import asyncio
 import astrbot.api.message_components as Comp
 from pyzbar.pyzbar import decode
 from astrbot.api.event import filter, AstrMessageEvent
@@ -18,7 +19,7 @@ class DecodeQrcode(Star):
             logger.error(
                 "未检测到 OpenCV 或缺少 wechat_qrcode 模块，请先安装依赖：pip install opencv-contrib-python-headless"
             )
-            raise
+            raise ImportError("缺少 OpenCV wechat_qrcode 模块")
 
     def _check_opencv(self) -> bool:
         """检查是否安装了 OpenCV 且包含 cv2.wechat_qrcode_WeChatQRCode"""
@@ -46,6 +47,27 @@ class DecodeQrcode(Star):
             sr_prototxt_path,
             sr_caffe_model_path,
         )
+
+    def process_image_sync(self, image_data) -> tuple[str, ...]:
+        # 直接识别
+        texts, _ = self.detector.detectAndDecode(image_data)
+        if not texts:
+            logger.debug("直接识别二维码失败，尝试滤波处理后再次识别。")
+            # 转为灰度图
+            image_data = cv2.cvtColor(image_data, cv2.COLOR_BGR2GRAY)
+            # 滤波器
+            image_data = cv2.bilateralFilter(
+                image_data, d=9, sigmaColor=75, sigmaSpace=75
+            )
+            # 检测和解码二维码
+            texts, _ = self.detector.detectAndDecode(image_data)
+
+        if not texts:
+            logger.debug("识别二维码失败，尝试降级 Pyzbar 再次识别。")
+            # 检测和解码二维码
+            result = decode(image_data)
+            texts = tuple(d.data.decode("utf-8") for d in result)
+        return texts
 
     @filter.command("qrde")
     async def qrde(self, event: AstrMessageEvent):
@@ -75,27 +97,9 @@ class DecodeQrcode(Star):
                 "无法读取图片，可能图片格式不支持或文件损坏，请再试一次。"
             )
             return
-
-        # 直接识别
-        texts, _ = self.detector.detectAndDecode(image)
-
-        if not texts:
-            logger.debug("直接识别二维码失败，尝试滤波处理后再次识别。")
-            # 转为灰度图
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            # 滤波器
-            image = cv2.bilateralFilter(image, d=9, sigmaColor=75, sigmaSpace=75)
-            # 检测和解码二维码
-            texts, _ = self.detector.detectAndDecode(image)
-
-        if not texts:
-            logger.debug("识别二维码失败，尝试降级 Pyzbar 再次识别。")
-            # 检测和解码二维码
-            result = decode(image)
-            texts = tuple(d.data.decode("utf-8") for d in result)
-
+        texts = await asyncio.to_thread(self.process_image_sync, image)
         # 处理解码结果
-        if len(texts) > 0:
+        if texts:
             # 对QQ使用转发
             if event.platform_meta.name == "aiocqhttp":
                 nodes = [
@@ -134,7 +138,7 @@ class DecodeQrcode(Star):
             yield event.chain_result(
                 [
                     Comp.Reply(id=event.message_obj.message_id),
-                    Comp.Plain("未识别到任何二维码。"),
+                    Comp.Plain("未识别到任何二维码或者有效内容。"),
                 ]
             )
 

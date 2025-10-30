@@ -112,7 +112,7 @@ class DecodeQrcode(Star):
                     )
                 ]
 
-                for _, text in enumerate(texts):
+                for text in texts:
                     nodes.append(
                         Node(
                             uin=event.get_sender_id(),
@@ -125,7 +125,7 @@ class DecodeQrcode(Star):
             # 其他平台则直接发送
             else:
                 result = "二维码识别结果: \n"
-                for _, text in enumerate(texts):
+                for text in texts:
                     result += f"{text.strip()}\n"
                 yield event.chain_result(
                     [
